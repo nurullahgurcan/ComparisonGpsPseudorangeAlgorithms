@@ -1,0 +1,58 @@
+clc
+clear
+format long g
+addpath('C:\Users\nurul\Desktop\GPS Receiver Psition\GPS Receiver Position\EKF')
+addpath('C:\Users\nurul\Desktop\GPS Receiver Psition\GPS Receiver Position\data')
+
+% NURULLAH - determines how many epochs will be got in observation and navigation data.
+n_obs_epoch = 100;   % max 2880
+
+% read observation file to get orbit elements
+[obs,rec_xyz_actual] = read_rinex_obs('amc40300.23o', n_obs_epoch);
+rec_xyz = zeros(3,1);
+
+% NURULLAH - moved before ephemeris datas
+epochs = unique(obs.data(:, obs.col.TOW));
+n_eph_epoch = ceil((max(epochs) - min(epochs)) / 120);
+% NURULLAH - fixed to number of matched epochs
+TimeSpan = epochs(1:n_obs_epoch);
+
+% read navigation file to get orbit elements 
+[ephemeris] = read_rinex_nav('AMC400USA_R_20230300000_01D_GN.rnx', n_eph_epoch);
+
+% GPS Satellite Measurements
+% c = 2.99792458e8 ; % speed of light (m/s)
+fL1 = 1575.42e6;   % L1 frequency (Hz)
+fL2 = 1227.6e6;    % L2 frequency (Hz)
+B=fL2^2/(fL2^2-fL1^2);
+A=-B+1;
+
+% Initialize satOrbits and User Position
+satOrbits = init_satOrbits(TimeSpan);
+userPos=zeros(length(TimeSpan),4);
+
+% NURULLAH - JUST COMMENT - calculates pseudorange and satpos for each epoch
+for ii=1:length(TimeSpan)
+    this_TOW = TimeSpan(ii);
+    index = find(obs.data(:,obs.col.TOW) == this_TOW);
+    curr_obs.data = obs.data(index, :);
+    curr_obs.col = obs.col;
+    satOrbits = set_satOrbits(curr_obs, ephemeris, rec_xyz, satOrbits, A, B, ii);
+    
+    % NURULLAH - calculates recPos using original code
+    [broadcast_obs,~]=createObs(this_TOW,satOrbits);    %satpos, pseudorange, PRN
+    [pos_original_code(ii,1:4)] = originalCodePos(satOrbits, this_TOW, rec_xyz);
+
+    % NURULLAH - calculates with other algorithms
+    [satpos, obs_pseudo, weight] = prepare_arguments(broadcast_obs);
+    [pos_least_squares(ii,1:4), el_weight] = leastSquarePos(satpos, obs_pseudo);  
+    [pos_sigma_weighted_ls(ii,1:4)] = weightedLeastSquarePos_sigma(satpos, obs_pseudo, weight);
+    [pos_exp_weighted_ls(ii,1:4)] = weightedLeastSquarePos_exp(satpos, obs_pseudo, weight);
+    % [pos_weighted_ls(ii,1:4)] = weightedLeastSquarePos(satpos, obs_pseudo, el_weight);
+    [pos_multilateration(ii,1:4)] = algebraicGPSequations(satpos, obs_pseudo);
+    pos_extended_kalman_filter(ii,:) = extended_kalman(satpos, obs_pseudo);
+end
+
+% NURULLAH
+plot_err(rec_xyz_actual, epochs, pos_least_squares, sigma_pos_weighted_ls, ...
+    pos_exp_weighted_ls, pos_multilateration);
